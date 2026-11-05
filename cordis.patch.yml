@@ -1,0 +1,4 @@
+- insert:
+    - id: companion-incubator
+      name: '@local/companion-incubator'
+      config: {}

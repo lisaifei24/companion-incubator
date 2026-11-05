@@ -1,0 +1,11 @@
+# 运行时产物：引擎每次运行会写/重建，不该进版本库
+# mind.json 是激素状态（活数据），删掉引擎会自动重建
+mind.json
+
+# 依赖与缓存
+node_modules/
+*.log
+
+# 系统杂项
+.DS_Store
+Thumbs.db

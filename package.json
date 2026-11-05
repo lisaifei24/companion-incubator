@@ -1,0 +1,24 @@
+{
+  "name": "@local/companion-incubator",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "A reusable companion-persona incubator: a generic hormone/mood engine plus an empty persona you fill in. Install, write who you are, and it grows.",
+  "exports": {
+    ".": "./index.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
+  },
+  "files": [
+    "index.js",
+    "cordis.patch.yml",
+    "locale/*.json",
+    "icon.svg",
+    "persona.json"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}
