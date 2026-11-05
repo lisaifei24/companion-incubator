@@ -2,6 +2,9 @@
 # mind.json 是激素状态（活数据），删掉引擎会自动重建
 mind.json
 
+# 用户放的原始会话日志（启动吸附源，属于个人数据）
+logs/
+
 # 依赖与缓存
 node_modules/
 *.log

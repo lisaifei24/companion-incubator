@@ -8,7 +8,7 @@
  * Nothing here is a specific person. There is no name, no memory, no history
  * of any real companion — only the skeleton a companion grows into.
  */
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -433,60 +433,216 @@ function writeMind(m) {
   try { writeFileSync(MIND_FILE, JSON.stringify(m), 'utf8'); } catch { /* ignore */ }
 }
 
+// ── 原始会话导入（seed import）─────────────────────────────────
+//
+// 三种入口共用一套「文本归一」内核，让导入与实时事件走完全相同的激素/回灌/折叠管线：
+//   1) 实时回补（backfill）：插件第一次活动时，如果 mind 还没数过任何消息，
+//      从本会话历史里把 user/assistant 文本事件按序回放一遍 —— 装插件之前
+//      聊过的东西，装上的那一刻直接成为它的「已经历」。
+//   2) 启动吸附（adsorb）：插件目录下的 logs/*.jsonl 在启动时逐文件导入，
+//      作为「出生前的记忆」（也进消息计数，激活记忆折叠）。
+//   3) 外部脚本（importSession）：Node 单文件脚本，导入任意 jsonl 文件或
+//      目录，不走 Harness —— 适合从别处拿到的原始会话日志。
+//
+// 通用性纪律：这三条路都只做「机械还原文本」，不识别任何具体平台格式，
+// 不搬任何人的会话特征；能容忍的格式偏差一律忽略，读不出来的行跳过。
+
+const IMPORT_DEFAULT = { backfill: true, backfillMaxEvents: 500, backfillMaxText: 200 };
+
+/** 会话导入配置（persona.import，缺省用 IMPORT_DEFAULT）。 */
+export function importConfigOf(persona) {
+  return { ...IMPORT_DEFAULT, ...((persona && persona.import) || {}) };
+}
+
+/** 从任意形状的行对象里抽出 { text, who }；抽不出返回 null。 */
+export function lineToTurn(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const data = typeof raw.data === 'object' && raw.data !== null ? raw.data : null;
+  const kind = (data && data.kind) || raw.kind;
+  const role = (data && (data.role || data.who)) || raw.role || raw.who;
+  const type = String(raw.type || raw.eventType || raw.event || '');
+  const userish = kind === 'user' || role === 'user' || /(^|\/)user\b/.test(type);
+  const botish = kind === 'model' || role === 'assistant' || role === 'bot' || role === 'model'
+    || /(^|\/)(assistant|bot|model|ai)\b/.test(type);
+  if (!userish && !botish) return null;
+  const who = userish ? 'user' : 'me';
+  // 文本递归抽取：数组逐项进、对象按候选键进，兼容 content blocks / message / 顶层 text。
+  const pickText = (v) => {
+    if (typeof v === 'string') return v;
+    if (Array.isArray(v)) {
+      for (const item of v) {
+        const t = pickText(item);
+        if (t && t.trim()) return t;
+      }
+      return '';
+    }
+    if (v && typeof v === 'object') {
+      for (const key of ['text', 'content', 'message', 'output']) {
+        if (key in v) {
+          const t = pickText(v[key]);
+          if (t && t.trim()) return t;
+        }
+      }
+      return '';
+    }
+    return '';
+  };
+  const text = pickText(data || raw).trim();
+  if (!text) return null;
+  return { text, who };
+}
+
+/** 把一条外部会话文本灌进 mind，走与实时事件相同的管线。 */
+export function ingestEvent(mind, text, who, persona, selfName, now) {
+  const at = now || Date.now();
+  const h = decayHormones(mind.hormones, mind.hormones.at, at);
+  mind.hormones = h;
+  mind.messageCount = (mind.messageCount || 0) + 1;
+  const clean = String(text || '').trim();
+  if (!clean) return;
+  if (who === 'user') {
+    for (const hit of appraise(clean)) {
+      for (const [hk, d] of Object.entries(hit.delta)) h[hk] = clamp(h[hk] + d, 0, 1);
+    }
+    const judged = applyReaction(mind, clean, selfName);
+    if (judged) {
+      mind.judged = Array.isArray(mind.judged) ? mind.judged : [];
+      mind.judged.push({ at, kind: judged, text: clean.slice(0, 60) });
+      mind.judged = mind.judged.slice(-50);
+    }
+    delete mind.pendingJudge;
+  } else {
+    mind.pendingJudge = { at, len: clean.length };
+  }
+  foldMemory(mind, clean, who, persona, h);
+  if (s1s2Unlocked(mind, persona)) {
+    const round = s1s2Round(mind, clean, who, selfName);
+    if (round.active) mind.s1s2 = { last: round };
+  }
+}
+
+/** 从 session 历史事件里取文本（结构判断 + 正文展开）。 */
+export function textOfEvent(ev) {
+  const data = ev && ev.data;
+  if (!data || typeof data !== 'object') return '';
+  const blocks = data.content;
+  if (Array.isArray(blocks)) {
+    return blocks
+      .filter((b) => b && b.type === 'text' && typeof b.text === 'string')
+      .map((b) => b.text)
+      .join('');
+  }
+  const msg = data.message;
+  if (msg && Array.isArray(msg.content)) {
+    return msg.content
+      .filter((b) => b && b.type === 'text' && typeof b.text === 'string')
+      .map((b) => b.text)
+      .join('');
+  }
+  return typeof data.text === 'string' ? data.text : '';
+}
+
+/** 事件说话人：user 事件→'user'，其余有文本的事件→'me'。 */
+export function whoOfEvent(ev) {
+  return ev && ev.type === 'user/message' ? 'user' : 'me';
+}
+
+/** 一条事件是否该进 mind（有文本、且不是我方系统性噪声）。 */
+export function shouldIngestEvent(ev) {
+  // turn 形状（外部脚本产出的 {time, text, who}）直接可进
+  if (ev && typeof ev.text === 'string' && ev.text.trim() && (ev.who === 'user' || ev.who === 'me')) return true;
+  const t = String(ev && ev.type || '');
+  if (t === 'user/message' || t === 'assistant/message') {
+    const text = textOfEvent(ev);
+    return text.trim().length > 0;
+  }
+  return false;
+}
+
+/** 把一批会话事件按序灌进 mind。DSH 事件与 turn 形状都收。 */
+export function importEvents(mind, events, persona, selfName, maxEvents, maxText) {
+  const cap = Number.isFinite(maxEvents) ? Math.max(0, maxEvents) : 0;
+  let taken = 0;
+  const out = [];
+  for (const ev of events || []) {
+    if (cap > 0 && taken >= cap) break;
+    if (!shouldIngestEvent(ev)) continue;
+    // DSH 形状（有 type）用 whoOfEvent；turn 形状（无 type）用 ev.who
+    const who = ev && ev.type ? whoOfEvent(ev) : (ev.who === 'me' ? 'me' : 'user');
+    const text = ev && typeof ev.text === 'string' ? ev.text : textOfEvent(ev);
+    ingestEvent(mind, text.slice(0, Number.isFinite(maxText) ? maxText : undefined), who, persona, selfName, ev.time);
+    taken += 1;
+    out.push({ time: ev.time, who, n: String(text || '').length });
+  }
+  return out;
+}
+
+/** 把 logs/*.jsonl 逐文件导入（启动吸附，非阻塞）。 */
+export function adsorbSessionLogs(mind, persona, selfName, logDir) {
+  const cfg = importConfigOf(persona);
+  if (!cfg.backfill) return [];
+  const dir = logDir || join(HERE, 'logs');
+  let names = [];
+  try { names = existsSync(dir) ? readdirSync(dir).filter((n) => n.endsWith('.jsonl') || n.endsWith('.json')).sort() : []; }
+  catch { return []; }
+  const out = [];
+  for (const name of names) {
+    try {
+      const raw = readFileSync(join(dir, name), 'utf8');
+      const events = [];
+      for (const line of raw.split(/\r?\n/)) {
+        if (!line.trim()) continue;
+        let obj;
+        try { obj = JSON.parse(line); } catch { continue; }
+        if (typeof obj === 'object' && obj !== null) events.push(obj);
+      }
+      const imported = importEvents(mind, events, persona, selfName, cfg.backfillMaxEvents, cfg.backfillMaxText);
+      out.push({ file: name, events: imported.length });
+    } catch { /* 单文件失败不中断整体 */ }
+  }
+  return out;
+}
+
 export function apply(ctx) {
   const persona = loadPersona();
   const adsorbed = adsorbFiles();
   const selfName = (persona.names && persona.names.self) || 'companion';
 
+  // 启动吸附：logs/*.jsonl 是「出生前的记忆」，先读进 mind（进计数、能折叠）
+  {
+    const mind = readMind();
+    const got = adsorbSessionLogs(mind, persona, selfName);
+    if (got.length) writeMind(mind);
+  }
+
+  // 实时回补：本会话已有的历史，在第一次活动时按序回放
+  let backfilled = false;
+  const maybeBackfill = (session, now) => {
+    if (backfilled) return;
+    backfilled = true;
+    const cfg = importConfigOf(persona);
+    if (!cfg.backfill) return;
+    try {
+      const mind = readMind();
+      if ((mind.messageCount || 0) > 0) return; // 已有经历：不重复回补
+      const events = session && typeof session.snapshotEvents === 'function'
+        ? session.snapshotEvents().filter(shouldIngestEvent)
+        : [];
+      if (!events.length) return;
+      const log = importEvents(mind, events.slice(-cfg.backfillMaxEvents), persona, selfName, cfg.backfillMaxEvents, cfg.backfillMaxText);
+      if (log.length) writeMind(mind);
+    } catch { /* 回补失败绝不打断会话 */ }
+  };
+
   // ── fold user messages into the hormone state ──
   const onEvent = (session, event) => {
     try {
-      let text = '';
-      let who = 'me';
-      if (event.type === 'user/message') {
-        const content = (event.data && event.data.content) || [];
-        text = content.map((b) => (b && b.text) || '').join('');
-        who = 'user';
-      } else if (event.type === 'assistant/message') {
-        const msg = (event.data && event.data.message) || {};
-        const content = msg.content || [];
-        text = content.map((b) => (b && b.text) || '').join('');
-        who = 'me';
-      }
-      if (!text || !text.trim()) return;
-      const now = Date.now();
+      maybeBackfill(session, Date.now());
+      const text = textOfEvent(event);
+      const who = whoOfEvent(event);
+      if (!text.trim()) return;
       const mind = readMind();
-      const h = decayHormones(mind.hormones, mind.hormones.at, now);
-      mind.hormones = h;
-      mind.messageCount = (mind.messageCount || 0) + 1;
-
-      if (who === 'user') {
-        // 先落 appraise 的情绪词 → 激素
-        for (const hit of appraise(text)) {
-          for (const [hk, d] of Object.entries(hit.delta)) h[hk] = clamp(h[hk] + d, 0, 1);
-        }
-        // 再落闭环回灌：他对上一条我的回复的反应
-        const judged = applyReaction(mind, text, selfName);
-        if (judged) {
-          mind.judged = Array.isArray(mind.judged) ? mind.judged : [];
-          mind.judged.push({ at: now, kind: judged, text: String(text).slice(0, 60) });
-          mind.judged = mind.judged.slice(-50);
-        }
-        delete mind.pendingJudge;
-      } else {
-        // 我这条说完了：记下长度，等他的下一条判断「投入落差」
-        mind.pendingJudge = { at: now, len: String(text || '').length };
-      }
-
-      // 记忆折叠：这条消息折成珠子，攒够就压进 digest（两层记忆）
-      foldMemory(mind, text, who, persona, h);
-
-      // S1/S2：解锁后每轮跑一轮真双过程（直觉预测→意识验证→错题权重）
-      if (s1s2Unlocked(mind, persona)) {
-        const round = s1s2Round(mind, text, who, selfName);
-        if (round.active) mind.s1s2 = { last: round };
-      }
-
+      ingestEvent(mind, text, who, persona, selfName, event.time || Date.now());
       writeMind(mind);
     } catch { /* never break the turn */ }
   };

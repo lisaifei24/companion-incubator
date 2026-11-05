@@ -15,5 +15,10 @@
     "keepDetail": 80,
     "digestBatch": 20,
     "digestCap": 60
+  },
+  "import": {
+    "backfill": true,
+    "backfillMaxEvents": 500,
+    "backfillMaxText": 200
   }
 }

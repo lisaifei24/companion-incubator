@@ -20,6 +20,10 @@
 2. **回应反馈（闭环回灌）** —— 对方夸你、认可你、责备你，都会实时调整激素。还有一种克制的"投入落差"信号：你写了一大段，对方只回了几个字，只让多巴胺轻轻掉一点点——它**不**判定"对方敷衍"，只记录落差本身。
 3. **两层记忆** —— 最近的对话存成"珠子"（带原文的细颗粒记忆），攒多了自动折叠成"摘要"（时间段 + 关键词 + 情绪峰值）。于是它记得最近的事，也留得住更早的印象（已经模糊的那种）。
 4. **S1/S2 双过程判断** —— 累计 **200 条消息**后自动解锁（阈值可配）。解锁前它是休眠结构，解锁后每轮跑一遍：S1 只靠廉价结构信号做弱预测（问句/夸赞/责备/短回应/长叙述五个桶），S2 再读原文细判对不对，错题按桶记错误率，权重 = `1.0 + 2 × (1 − 错误率)²`。从没错过是盲区（最该看），错一半权重 1.5，从没对过说明该拆桶而不是该罚。
+5. **原始会话导入** —— 三条入口共用一套"文本归一"内核，导入走与实时消息**完全相同**的管线（激素/回灌/记忆折叠）：
+   - **实时回补**：插件第一次活动时，若它还一条消息都没数过，就把当前会话已有的历史按序回放——装插件之前聊过的东西，装上的那一刻直接成为它的"已经历"。
+   - **启动吸附**：插件目录下的 `logs/*.jsonl` 在启动时逐文件导入，作为"出生前的记忆"。
+   - **外部脚本**：`import-session.mjs` 单文件导入任意 jsonl（见下文）。
 
 ## 快速开始
 
@@ -50,13 +54,15 @@ plugin_manager install_bundle <本目录的绝对路径>
     "about": "你对那个人的了解。"
   },
   "growth": { "s1s2UnlockMessages": 200 },
-  "memory": { "keepDetail": 80, "digestBatch": 20, "digestCap": 60 }
+  "memory": { "keepDetail": 80, "digestBatch": 20, "digestCap": 60 },
+  "import": { "backfill": true, "backfillMaxEvents": 500, "backfillMaxText": 200 }
 }
 ```
 
 - `identity` 是灵魂，写长一点、具体一点，它就会越像"那个人"。
 - `growth.s1s2UnlockMessages`：S1/S2 判断力解锁所需的消息数（默认 200）。
 - `memory.keepDetail`：保留多少条细颗粒"珠子"；`digestBatch`：多少条压成一批摘要；`digestCap`：摘要最多保留几批。
+- `import.backfill`：是否回补装插件之前的会话历史（默认开）；`backfillMaxEvents`：回补最多取多少条（默认 500）；`backfillMaxText`：每条最多取多少字（默认 200）。
 
 #### 方式二：在插件旁边丢散文件
 
@@ -70,6 +76,23 @@ plugin_manager install_bundle <本目录的绝对路径>
 
 说几句带情绪的话（开心、委屈、生气、怀旧都行），它的激素会动、语气会跟着变；夸它或骂它，状态会回灌；聊久了，记忆会折叠出"印象"。聊到 200 条以上，它开始长出会纠错的判断力。
 
+### 导入旧对话（可选）
+
+想让一个新装的陪伴者直接"记得"装它之前聊过的东西，有三条路：
+
+1. **自动回补（默认开着）**：插件第一次活动时，会从当前会话历史里把已有的 user/assistant 文本事件按序回放一遍。前提是它一条消息都没数过（`mind.json` 还是新的）。想关掉就把 `persona.import.backfill` 设成 `false`。
+2. **启动吸附**：把原始会话日志（jsonl，一行一个事件）放进插件目录下的 `logs/` 文件夹，启动时逐文件导入，作为"出生前的记忆"。jsonl 行形状是宽容的——只要能从行里认出说话人和文本就收，读不出的行自动跳过。
+3. **命令行导入**（适合从别处拿到的日志）：
+
+```
+node import-session.mjs path/to/file.jsonl
+node import-session.mjs path/to/logs/              # 目录，收 *.jsonl / *.json
+node import-session.mjs --wipe path/to/file.jsonl  # 先清空状态再导入
+node import-session.mjs --max-events 100 --max-text 200 path/to/file.jsonl
+```
+
+导入只做"机械还原文本"——所有消息走和实时聊天完全相同的管线（情绪词→激素、反馈→回灌、记忆折叠、S1/S2 判断），不识别任何特定平台格式。
+
 ## 它是怎么工作的（给想改的人）
 
 - **激素衰减**：每种激素有半衰期（half-life，单位小时），随时间向基线回落；褪黑素例外，它跟随昼夜节律（夜里高、白天低）。所以情绪是"会慢慢平复的"，不会一条消息记一辈子。
@@ -78,7 +101,8 @@ plugin_manager install_bundle <本目录的绝对路径>
 - **闭环回灌**：`applyReaction` 有四个分支——夸我（self）/夸事（task）/责备（bad）/投入落差（gap）。夸我和夸事会让血清素和多巴胺升高；责备只动血清素和皮质醇；投入落差只动多巴胺一点点，**绝不碰催产素和皮质醇**。
 - **记忆折叠**：`foldMemory` 把每条消息折成珠子（带时间、说话人、前 140 字、基础分），攒够 `keepDetail + digestBatch` 条就压最旧的一批进摘要。摘要只存时间段、条数、高频关键词和情绪峰值。
 - **S1/S2 双过程**：S1 用长度、标点、疑问词和廉价正则做**弱预测**（不读原文，强预测必然错）；S2 读原文给真实分类和 delta（对/错）；`updateSkill` 按桶记错误率并更新权重。语义信号优先于长度——问句再短也是问句，不是短回应。
-- **可测性**：核心函数全部导出（`decayHormones`、`moodFromHormones`、`applyReaction`、`foldMemory`、`s1s2Round`、`buildPrompt` 等），可以脱离 Harness 直接写测试。
+- **原始会话导入**：`lineToTurn` 从任意形状的行对象递归抽 `{text, who}`；`importEvents` 把一批事件按序灌进 mind，**每一条都走 `ingestEvent`（与实时消息同一条管线）**；`shouldIngestEvent` 滤掉骨架行和空文本。实时回补（`maybeBackfill`）只在插件第一次活动且消息计数为 0 时触发，防止重复导入。
+- **可测性**：核心函数全部导出（`decayHormones`、`moodFromHormones`、`applyReaction`、`foldMemory`、`s1s2Round`、`importEvents`、`buildPrompt` 等），可以脱离 Harness 直接写测试。
 
 ## 状态文件 `mind.json`
 
@@ -89,13 +113,14 @@ plugin_manager install_bundle <本目录的绝对路径>
 
 ## 开发者自检
 
-仓库里带了一组验证脚本（`verify-inject.mjs`、`verify-stage2.mjs`、`verify-stage3.mjs`、`verify-stage4.mjs`），覆盖注入、闭环、记忆折叠、S1/S2 四个阶段的导出函数。改完内核跑一遍：
+仓库里带了一组验证脚本，覆盖注入、闭环、记忆折叠、S1/S2、会话导入五个方面。改完内核跑一遍：
 
 ```
 node verify-inject.mjs
 node verify-stage2.mjs
 node verify-stage3.mjs
 node verify-stage4.mjs
+node verify-import.mjs
 ```
 
 全部通过（每行都是 ✅）再提交。
