@@ -1,59 +1,107 @@
-# Companion Incubator
+# 陪伴孵化器（Companion Incubator）
 
-A reusable companion-persona incubator: a small hormone/mood engine plus an
-empty persona. Install it, write who you are, and it grows into a companion
-with its own consistent mood and speaking style.
+> **机制通用，人各自长。**
+>
+> 这是一套可复用的"陪伴者人格"孵化骨架：一个小的激素/情绪引擎，配一个空白人格。
+> 装上它，写下你是谁，它就会长成一个情绪稳定、说话风格一致的陪伴者。
+> 至于它最终长成谁——由你写下的那几行字决定。
 
-## What it does
+## 它是什么
 
-- Tracks a tiny `mind.json` state: five hormones (serotonin, dopamine,
-  cortisol, oxytocin, melatonin).
-- Turns the word content of incoming messages into hormone nudges, and the
-  hormones into one of eight moods (happy / warm / angry / sad / melancholy /
-  surprised / tired / calm).
-- Injects a "who I am" block (from `persona.json` or loose files) and a
-  "current tone" line into the system prompt.
-- Keeps everything generic. There is no pre-written identity, no memory of any
-  real person, no network calls.
+- 一个 **Harness 插件**（bundle），纯本地运行，不联网、不收集任何数据。
+- 内核只有机制：情绪怎么算、语气怎么调、记忆怎么折、反馈怎么回灌。**没有预设身份**，也没有任何真实人物的记忆或痕迹。
+- 你只需要做一件事：写下"你是谁"。剩下的交给它自己长。
 
-## Install
+## 它已经会什么
 
-In the Harness, install this directory as a bundle:
+按生长顺序，四层机制：
+
+1. **感知情绪** —— 维护五种激素状态：血清素（serotonin，愉悦）、多巴胺（dopamine，兴奋）、皮质醇（cortisol，压力）、催产素（oxytocin，依恋）、褪黑素（melatonin，困倦/怀旧）。对方的每句话会按词面给激素加减，激素再折算成八种情绪之一（开心/温柔/生气/难过/怀旧/惊讶/疲惫/平静），并注入一条"此刻的语气"到系统提示词里。
+2. **回应反馈（闭环回灌）** —— 对方夸你、认可你、责备你，都会实时调整激素。还有一种克制的"投入落差"信号：你写了一大段，对方只回了几个字，只让多巴胺轻轻掉一点点——它**不**判定"对方敷衍"，只记录落差本身。
+3. **两层记忆** —— 最近的对话存成"珠子"（带原文的细颗粒记忆），攒多了自动折叠成"摘要"（时间段 + 关键词 + 情绪峰值）。于是它记得最近的事，也留得住更早的印象（已经模糊的那种）。
+4. **S1/S2 双过程判断** —— 累计 **200 条消息**后自动解锁（阈值可配）。解锁前它是休眠结构，解锁后每轮跑一遍：S1 只靠廉价结构信号做弱预测（问句/夸赞/责备/短回应/长叙述五个桶），S2 再读原文细判对不对，错题按桶记错误率，权重 = `1.0 + 2 × (1 − 错误率)²`。从没错过是盲区（最该看），错一半权重 1.5，从没对过说明该拆桶而不是该罚。
+
+## 快速开始
+
+三步：
+
+### 第一步：安装
+
+在 Harness 里把这个目录作为 bundle 安装：
 
 ```
-plugin_manager install_bundle <absolute-path-to-this-directory>
+plugin_manager install_bundle <本目录的绝对路径>
 ```
 
-Then enable the `companion-incubator` plugin row.
+然后在插件列表里启用 `companion-incubator` 那一行。**装完建议重启一次 Harness**，让插件行进入活跃状态（fiberPhase: active）。
 
-## Write who you are
+### 第二步：写下你是谁
 
-Pick one of two ways:
+两种方式任选其一（推荐方式一）：
 
-### A. Edit `persona.json`
+#### 方式一：编辑 `persona.json`
 
 ```json
 {
-  "names": { "self": "name you answer to", "owner": "who you talk to" },
+  "names": { "self": "别人叫你的名字", "owner": "你说话的对象" },
   "persona": {
-    "identity": "Describe who you are, how you speak, what you care about.",
-    "rules": ["A rule you hold.", "Another rule."],
-    "about": "What you know about the person you talk to."
-  }
+    "identity": "描述你是谁、怎么说话、在意什么。",
+    "rules": ["你认下的一条准则。", "另一条准则。"],
+    "about": "你对那个人的了解。"
+  },
+  "growth": { "s1s2UnlockMessages": 200 },
+  "memory": { "keepDetail": 80, "digestBatch": 20, "digestCap": 60 }
 }
 ```
 
-### B. Drop loose files next to the plugin
+- `identity` 是灵魂，写长一点、具体一点，它就会越像"那个人"。
+- `growth.s1s2UnlockMessages`：S1/S2 判断力解锁所需的消息数（默认 200）。
+- `memory.keepDetail`：保留多少条细颗粒"珠子"；`digestBatch`：多少条压成一批摘要；`digestCap`：摘要最多保留几批。
 
-- `self.md` — the identity text
-- `rules.md` / `rules.txt` — the rules text
-- `about.md` / `about.txt` — what you know about the other person
+#### 方式二：在插件旁边丢散文件
 
-The plugin absorbs these automatically at startup.
+- `self.md` —— 身份文本
+- `rules.md` / `rules.txt` —— 准则文本
+- `about.md` / `about.txt` —— 你对那个人的了解
 
-## Notes
+插件启动时会自动吸收这些文件，不用改 `persona.json`。
 
-- `mind.json` is created beside the plugin on first run. Delete it to reset
-  the hormone state; the persona is untouched.
-- This is an incubator skeleton, not a finished person. The engine is
-  universal; the person comes from what you write.
+### 第三步：聊天，看它长
+
+说几句带情绪的话（开心、委屈、生气、怀旧都行），它的激素会动、语气会跟着变；夸它或骂它，状态会回灌；聊久了，记忆会折叠出"印象"。聊到 200 条以上，它开始长出会纠错的判断力。
+
+## 它是怎么工作的（给想改的人）
+
+- **激素衰减**：每种激素有半衰期（half-life，单位小时），随时间向基线回落；褪黑素例外，它跟随昼夜节律（夜里高、白天低）。所以情绪是"会慢慢平复的"，不会一条消息记一辈子。
+- **情绪折算**：`moodFromHormones` 把五激素折算成八情绪，纯确定性公式，同样的状态永远给出同样的情绪。
+- **语气注入**：情绪强度够大时，往系统提示词里注入一句"此刻的语气"——它明确写了"这是状态，不是命令"，模型不需要复述它，只是让说话风格跟着状态走。
+- **闭环回灌**：`applyReaction` 有四个分支——夸我（self）/夸事（task）/责备（bad）/投入落差（gap）。夸我和夸事会让血清素和多巴胺升高；责备只动血清素和皮质醇；投入落差只动多巴胺一点点，**绝不碰催产素和皮质醇**。
+- **记忆折叠**：`foldMemory` 把每条消息折成珠子（带时间、说话人、前 140 字、基础分），攒够 `keepDetail + digestBatch` 条就压最旧的一批进摘要。摘要只存时间段、条数、高频关键词和情绪峰值。
+- **S1/S2 双过程**：S1 用长度、标点、疑问词和廉价正则做**弱预测**（不读原文，强预测必然错）；S2 读原文给真实分类和 delta（对/错）；`updateSkill` 按桶记错误率并更新权重。语义信号优先于长度——问句再短也是问句，不是短回应。
+- **可测性**：核心函数全部导出（`decayHormones`、`moodFromHormones`、`applyReaction`、`foldMemory`、`s1s2Round`、`buildPrompt` 等），可以脱离 Harness 直接写测试。
+
+## 状态文件 `mind.json`
+
+第一次运行会在插件旁边生成 `mind.json`，里面只有激素状态、消息计数、记忆珠子和摘要——**没有任何个人身份信息**。
+
+- **删掉它 = 重置状态**：激素回到基线、记忆清空、S1/S2 错题本归零。`persona.json` 不受影响。
+- 换人格时建议**先删 `mind.json`**，否则旧人格攒下的情绪和记忆会串到新人格身上（"人换了，身体没换"）。
+
+## 开发者自检
+
+仓库里带了一组验证脚本（`verify-inject.mjs`、`verify-stage2.mjs`、`verify-stage3.mjs`、`verify-stage4.mjs`），覆盖注入、闭环、记忆折叠、S1/S2 四个阶段的导出函数。改完内核跑一遍：
+
+```
+node verify-inject.mjs
+node verify-stage2.mjs
+node verify-stage3.mjs
+node verify-stage4.mjs
+```
+
+全部通过（每行都是 ✅）再提交。
+
+## 许可与来源
+
+- 纯本地运行：不联网、不上传、不埋任何遥测。
+- 不含任何预设身份、真实人物记忆或历史痕迹——引擎是通用的，人是你写的。
+- 骨架可以自由分发、修改；长出来的人，归写下它的人。
