@@ -231,6 +231,70 @@ export function s1s2Pass(mind, text, persona) {
   return { active: true, note: 'S1/S2 已解锁，判断回路在位（骨架）。' };
 }
 
+// ── S1/S2 core: 直觉预测 → 意识验证 → 错题权重 ───────────────
+//
+// 双过程的通用实现，沿用白天实验学到的三课：
+//   1) S1 只靠廉价结构信号做弱预测（桶 + 置信），不读原文 —— 强预测必然错
+//   2) S2 才读原文细判，产出 delta（S1 对/错）
+//   3) 错题按「桶」记 err_rate，权重 = 1.0 + 2*(1-err)^2：
+//      从没错过 → 3.0（这是盲区，最该看）
+//      错一半   → 1.5
+//      从没对过 → 1.0（该拆桶，不是该罚；压到 0 等于删掉错误证据）
+//   桶本身是通用的中文交互结构，不含任何具体人名或记忆锚点。
+
+const S1_BUCKETS = ['问句', '夸赞', '责备', '短回应', '长叙述'];
+
+/** S1 直觉：只看长度 / 标点 / 说话人，不读内容。 */
+export function s1Predict(text, who, selfName) {
+  const t = String(text || '').trim();
+  const len = t.length;
+  const isQuestion = /[？?]\s*$/.test(t) || /^(什么|怎么|为什么|能不能|要不要|是不是)/.test(t);
+  // 弱信号：夸赞/责备靠廉价正则，和 S2 同源但只做「桶」的弱预测。
+  const selfPraiseRE = makeSelfPraiseRE(selfName);
+  if (selfPraiseRE.test(t)) return { bucket: '夸赞', conf: 0.65, cue: '命中夸夸词' };
+  if (BLAME_RE.test(t)) return { bucket: '责备', conf: 0.65, cue: '命中责备词' };
+  // 语义信号优先于长度：问句哪怕很短，也是问句，不是短回应。
+  if (isQuestion) return { bucket: '问句', conf: 0.7, cue: `len=${len} 问号/疑问词` };
+  if (who === 'user' && len >= 100) return { bucket: '长叙述', conf: 0.55, cue: `len=${len} 他/她说的长句` };
+  if (len <= 24) return { bucket: '短回应', conf: 0.6, cue: `len=${len} 短句` };
+  return { bucket: '长叙述', conf: 0.5, cue: `len=${len} 默认长句` };
+}
+
+/** S2 意识：读原文，产出真实分类。夸/责复用前面的正则。 */
+export function s2Check(text, selfName) {
+  const t = String(text || '');
+  const selfPraiseRE = makeSelfPraiseRE(selfName);
+  const isQuestion = /[？?]\s*$/.test(t);
+  if (selfPraiseRE.test(t)) return { kind: '夸赞', conf: 0.8, basis: '命中夸夸词' };
+  if (BLAME_RE.test(t)) return { kind: '责备', conf: 0.8, basis: '命中责备词' };
+  if (TASK_PRAISE_RE.test(t)) return { kind: '夸赞', conf: 0.65, basis: '命中夸奖词' };
+  if (isQuestion) return { kind: '问句', conf: 0.7, basis: '结尾问号' };
+  if (t.length <= 24) return { kind: '短回应', conf: 0.6, basis: '短句' };
+  return { kind: '长叙述', conf: 0.55, basis: '长句无其他信号' };
+}
+
+/** 更新一个桶的 skill 档案，返回 err_rate 与错题权重。 */
+export function updateSkill(skill, bucket, delta) {
+  const b = skill[bucket] || { n: 0, wrong: 0, errRate: 0, weight: 3.0 };
+  b.n += 1;
+  if (!delta) b.wrong += 1;
+  b.errRate = b.wrong / b.n;
+  b.weight = 1.0 + 2.0 * Math.pow(1 - b.errRate, 2);
+  skill[bucket] = b;
+  return b;
+}
+
+/** 完整一轮双过程。仅在解锁后调用；未解锁返回 { active:false }。 */
+export function s1s2Round(mind, text, who, selfName) {
+  const pred = s1Predict(text, who, selfName);
+  const check = s2Check(text, selfName);
+  const delta = pred.bucket === check.kind ? 1 : 0;
+  const skill = (mind.s1Skill) || {};
+  updateSkill(skill, pred.bucket, delta);
+  mind.s1Skill = skill;
+  return { active: true, pred: pred.bucket, real: check.kind, delta, skill: skill[pred.bucket] };
+}
+
 // ── two-tier memory fold (generic, configurable) ────────────────
 //
 // 两层记忆：
@@ -417,10 +481,10 @@ export function apply(ctx) {
       // 记忆折叠：这条消息折成珠子，攒够就压进 digest（两层记忆）
       foldMemory(mind, text, who, persona, h);
 
-      // S1/S2 骨架：解锁后每轮跑一次（当前是休眠骨架，只标记状态）
-      const s1s2 = s1s2Pass(mind, text, persona);
-      if (s1s2.active) {
-        mind.s1s2 = { unlockedAt: now };
+      // S1/S2：解锁后每轮跑一轮真双过程（直觉预测→意识验证→错题权重）
+      if (s1s2Unlocked(mind, persona)) {
+        const round = s1s2Round(mind, text, who, selfName);
+        if (round.active) mind.s1s2 = { last: round };
       }
 
       writeMind(mind);
