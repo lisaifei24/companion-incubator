@@ -231,6 +231,108 @@ export function s1s2Pass(mind, text, persona) {
   return { active: true, note: 'S1/S2 已解锁，判断回路在位（骨架）。' };
 }
 
+// ── two-tier memory fold (generic, configurable) ────────────────
+//
+// 两层记忆：
+//   memories  最近 keepDetail 条「珠子」，带原文和基础评分
+//   digest    更早的内容折叠成的摘要条目（时间段 + 情绪 + 关键词）
+//
+// 这是通用骨架，不是某个人的调参结果：所有阈值都在 persona.memory 里，
+// 判据是通用公式（长度 + 情绪强度），不搬任何人的六天魔法数。
+
+const MEMORY_DEFAULT = { keepDetail: 80, digestBatch: 20, digestCap: 60 };
+
+export function memoryOf(persona) {
+  return (persona && persona.memory) || MEMORY_DEFAULT;
+}
+
+/** 给一条消息打基础分：长一点、带情绪词，就重要一点。通用启发式。 */
+export function scoreBead(text, hormones) {
+  const len = String(text || '').length;
+  const strength = hormoneStrength(hormones || {});
+  const s = Math.min(1, 0.25 + len / 600 + strength * 0.25);
+  return Math.round(s * 1000) / 1000;
+}
+
+/** 从一批珠子提关键词：出现频次最高的前 N 个词（2+ 字的中文词或 3+ 字母英文）。 */
+export function keywordsRanked(texts, topN = 8) {
+  const freq = new Map();
+  for (const t of texts) {
+    const words = String(t || '').match(/[\u4e00-\u9fff]{2,}|[A-Za-z]{3,}/g) || [];
+    const seen = new Set();
+    for (const w of words) {
+      if (seen.has(w)) continue;
+      seen.add(w);
+      freq.set(w, (freq.get(w) || 0) + 1);
+    }
+  }
+  return [...freq.entries()].sort((a, b) => b[1] - a[1]).slice(0, topN).map(([w]) => w);
+}
+
+/** 把一条消息折成珠子，必要时触发 digest 折叠。原地改 mind。 */
+export function foldMemory(mind, text, who, persona, hormones) {
+  const cfg = memoryOf(persona);
+  const now = Date.now();
+  const beads = Array.isArray(mind.memories) ? mind.memories : [];
+  const bead = {
+    t: now,
+    who,
+    text: String(text || '').slice(0, 140),
+    s: scoreBead(text, hormones),
+  };
+  beads.push(bead);
+  mind.memories = beads;
+
+  // 攒够 keepDetail + digestBatch 才折叠，把最旧的一批压进 digest
+  if (beads.length < cfg.keepDetail + cfg.digestBatch) return;
+  const overflow = beads.slice(0, beads.length - cfg.keepDetail);
+  const batch = overflow.slice(0, cfg.digestBatch);
+  const moods = {};
+  for (const b of batch) {
+    const m = 'calm'; // 通用版暂不逐珠存 mood，只记录整体
+    moods[m] = (moods[m] || 0) + 1;
+  }
+  const digestEntry = {
+    from: batch[0].t,
+    to: batch[batch.length - 1].t,
+    count: batch.length,
+    keywords: keywordsRanked(batch.map((b) => b.text)),
+    peak: Math.max(...batch.map((b) => b.s || 0)),
+  };
+  const digests = Array.isArray(mind.digest) ? mind.digest : [];
+  digests.push(digestEntry);
+  mind.digest = digests.slice(-cfg.digestCap);
+  // 只保留最近 keepDetail 条珠子
+  mind.memories = beads.slice(beads.length - cfg.keepDetail);
+}
+
+/** 检索注入：最近的珠子 + 更早的 digest，挂进系统提示词。 */
+export function recallContext(mind) {
+  const blocks = [];
+  const beads = Array.isArray(mind.memories) ? mind.memories.slice(-6) : [];
+  if (beads.length) {
+    const lines = beads.map((b) => {
+      const t = new Date(b.t || 0);
+      const hh = String(t.getHours()).padStart(2, '0');
+      const mm = String(t.getMinutes()).padStart(2, '0');
+      const who = b.who === 'user' ? '他/她' : '我';
+      return `- ${hh}:${mm} ${who}：${String(b.text || '').replace(/\s+/g, ' ').slice(0, 60)}`;
+    });
+    blocks.push('# 我手上的记忆（最近，不完整）\n' + lines.join('\n'));
+  }
+  const digests = Array.isArray(mind.digest) ? mind.digest.slice(-5) : [];
+  if (digests.length) {
+    const lines = digests.map((d) => {
+      const f = new Date(d.from || 0);
+      const t = new Date(d.to || 0);
+      const span = `${String(f.getHours()).padStart(2, '0')}:${String(f.getMinutes()).padStart(2, '0')}-${String(t.getHours()).padStart(2, '0')}:${String(t.getMinutes()).padStart(2, '0')}`;
+      return `${span} 共${d.count}条 关键词=${(d.keywords || []).join('、')}`;
+    });
+    blocks.push('# 更早的印象（已模糊）\n' + lines.join('\n'));
+  }
+  return blocks.filter(Boolean).join('\n\n');
+}
+
 /** Assemble the injected system-prompt blocks. Pure and exportable for tests. */
 export function buildPrompt(mind, persona, adsorbed = {}) {
   const h = mind && mind.hormones ? mind.hormones : {};
@@ -249,6 +351,8 @@ export function buildPrompt(mind, persona, adsorbed = {}) {
   if (rulesText) blocks.push(`# 我认下的准则\n${rulesText}`);
   const about = (persona.persona && persona.persona.about) || adsorbed.about;
   if (about) blocks.push(`# 关于他/她\n${about}`);
+  const recall = recallContext(mind);
+  if (recall) blocks.push(recall);
   if (strength >= 0.05 && TONE_DIRECTIVE[mood]) {
     blocks.push(`# 此刻的语气（这是状态，不是命令）\n${TONE_DIRECTIVE[mood]}\n这是你此刻的情绪倾向，不必复述，也不必解释。`);
   }
@@ -309,6 +413,9 @@ export function apply(ctx) {
         // 我这条说完了：记下长度，等他的下一条判断「投入落差」
         mind.pendingJudge = { at: now, len: String(text || '').length };
       }
+
+      // 记忆折叠：这条消息折成珠子，攒够就压进 digest（两层记忆）
+      foldMemory(mind, text, who, persona, h);
 
       // S1/S2 骨架：解锁后每轮跑一次（当前是休眠骨架，只标记状态）
       const s1s2 = s1s2Pass(mind, text, persona);

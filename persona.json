@@ -10,5 +10,10 @@
   },
   "growth": {
     "s1s2UnlockMessages": 200
+  },
+  "memory": {
+    "keepDetail": 80,
+    "digestBatch": 20,
+    "digestCap": 60
   }
 }
