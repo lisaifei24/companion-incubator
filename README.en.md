@@ -77,6 +77,26 @@ Pick one of two ways:
 
 The plugin absorbs these automatically at startup.
 
+## Reference documents
+
+`docs/` holds the two theoretical blueprints behind this engine — the
+incubator's hormone math, memory folding, and S1/S2 dual process are all
+simplifications of these mechanisms:
+
+- `docs/人脑记忆链与思维链：机制与代码模拟.md` — memory networks
+  (hippocampal indexing, activation spread, pattern completion, replay,
+  reconsolidation, forgetting), chains of thought (working-memory bottleneck,
+  attention, serial trace, metacognition), and their mutual
+  retrieve–reason–verify–write-back loop.
+- `docs/情绪感情模块：机制与代码模拟（补充篇）.md` — valence × arousal
+  emotion, emotion's modulation of memory/thought/decision, emotion regulation
+  (reappraisal / suppression / distraction / decay).
+
+In one line: **hormones ≈ valence×arousal made concrete, memory folding ≈
+reconsolidation + forgetting, closed-loop feedback ≈ goal-progress appraisal,
+S1/S2 ≈ system 1 / system 2.** The originals are Python teaching simulations;
+the incubator is an engineering landing of them in real conversation.
+
 ## Notes
 
 - `mind.json` is created beside the plugin on first run. Delete it to reset
