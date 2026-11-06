@@ -370,29 +370,80 @@ export function foldMemory(mind, text, who, persona, hormones) {
   mind.memories = beads.slice(beads.length - cfg.keepDetail);
 }
 
-/** 检索注入：最近的珠子 + 更早的 digest，挂进系统提示词。 */
+/**
+ * 检索注入：最近的珠子 + 按天聚合的 digest，挂进系统提示词。
+ *
+ * 2026-11-06 从主库回灌两个已验证的教训（B 方向「机制通用」的迭代）：
+ * ① digest 不再只取最近 5 批——今天聊满时昨天会从记忆里整个消失
+ *   （主库 L088 修过的根因，通用框架会以同样方式长出来）。
+ *   改法：按天聚合。今天给细节批，往日每天一行日摘要。
+ * ② 珠子行带日期标签：没有日期，「昨天说的那句」混在今天的行里分不清
+ *   （主库同款改法）。
+ * 这让「昨天我们做了什么」可以直接答，不用去翻任何文件。
+ */
 export function recallContext(mind) {
   const blocks = [];
-  const beads = Array.isArray(mind.memories) ? mind.memories.slice(-6) : [];
+
+  // ── 珠子：带日期标签 ──
+  const beads = Array.isArray(mind.memories) ? mind.memories : [];
   if (beads.length) {
-    const lines = beads.map((b) => {
+    const now = Date.now();
+    const dayKeyOf = (t) => {
+      const d = new Date(t);
+      return `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`;
+    };
+    const todayK = dayKeyOf(now);
+    const yestK = dayKeyOf(now - 86400000);
+    const lines = beads.slice(-8).map((b) => {
       const t = new Date(b.t || 0);
       const hh = String(t.getHours()).padStart(2, '0');
       const mm = String(t.getMinutes()).padStart(2, '0');
+      const k = dayKeyOf(b.t || 0);
+      const dayLabel = k === todayK ? '' : k === yestK ? '昨天 ' : k.slice(5) + ' ';
       const who = b.who === 'user' ? '他/她' : '我';
-      return `- ${hh}:${mm} ${who}：${String(b.text || '').replace(/\s+/g, ' ').slice(0, 60)}`;
+      return `- ${dayLabel}${hh}:${mm} ${who}：${String(b.text || '').replace(/\s+/g, ' ').slice(0, 60)}`;
     });
     blocks.push('# 我手上的记忆（最近，不完整）\n' + lines.join('\n'));
   }
-  const digests = Array.isArray(mind.digest) ? mind.digest.slice(-5) : [];
+
+  // ── digest：按天聚合 ──
+  const digests = Array.isArray(mind.digest) ? mind.digest : [];
   if (digests.length) {
-    const lines = digests.map((d) => {
-      const f = new Date(d.from || 0);
-      const t = new Date(d.to || 0);
-      const span = `${String(f.getHours()).padStart(2, '0')}:${String(f.getMinutes()).padStart(2, '0')}-${String(t.getHours()).padStart(2, '0')}:${String(t.getMinutes()).padStart(2, '0')}`;
-      return `${span} 共${d.count}条 关键词=${(d.keywords || []).join('、')}`;
-    });
-    blocks.push('# 更早的印象（已模糊）\n' + lines.join('\n'));
+    const dayKeyOf = (t) => {
+      const d = new Date(t);
+      return `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`;
+    };
+    const nowD = new Date();
+    const todayK = dayKeyOf(Date.now());
+    const yestK = dayKeyOf(Date.now() - 86400000);
+    const dayLabelOf = (k) => (k === todayK ? '今天' : k === yestK ? '昨天' : k.slice(5));
+
+    const byDay = new Map();
+    for (const d of digests) {
+      const k = dayKeyOf(d.from || d.to || 0);
+      if (!byDay.has(k)) byDay.set(k, []);
+      byDay.get(k).push(d);
+    }
+    const dayKeys = [...byDay.keys()].sort();
+
+    const fmtTime = (t) => {
+      const d = new Date(t || 0);
+      return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+    };
+    const lines = [];
+    // 今天：细节批（最多 3）；往日：每天聚合一行（最近 6 天）
+    const todayBatches = byDay.get(todayK) || [];
+    for (const d of todayBatches.slice(-3)) {
+      lines.push(`今天 ${fmtTime(d.from)}-${fmtTime(d.to)} 共${d.count}条 关键词=${(d.keywords || []).join('、')}`);
+    }
+    const pastDays = dayKeys.filter((k) => k < todayK).slice(-6);
+    for (const k of pastDays) {
+      const bs = byDay.get(k);
+      const total = bs.reduce((n, d) => n + (d.count || 0), 0);
+      const kws = [...new Set(bs.flatMap((d) => d.keywords || []))].slice(0, 6);
+      lines.push(`${dayLabelOf(k)} ${fmtTime(bs[0].from)}-${fmtTime(bs[bs.length - 1].to)} 共${total}条 关键词=${kws.join('、')}`);
+    }
+    if (lines.length) blocks.push('# 更早的印象（已模糊，按天排列）\n' + lines.join('\n'));
   }
   return blocks.filter(Boolean).join('\n\n');
 }
