@@ -107,3 +107,12 @@ the incubator is an engineering landing of them in real conversation.
   part of what it has lived.
 - This is an incubator skeleton, not a finished person. The engine is
   universal; the person comes from what you write.
+- **No machine-noise filter.** `shouldIngestEvent` accepts any user/assistant
+  message with text and does not recognize systematic noise (scheduled
+  reminders, snapshot receipts, system announcements). Today the incubator is
+  pure conversation and has no scheduling source, so nothing gets misfiled —
+  but if you later wire in scheduled tasks / automation receipts, filter those
+  machine texts out before they enter the pipeline, or receipts will be folded
+  into memory as real experiences, occupying memory slots and polluting recall.
+  The main repo hit exactly this (scheduled receipts folded in as beads); the
+  lesson is flagged here.
