@@ -12,6 +12,26 @@
 - 内核只有机制：情绪怎么算、语气怎么调、记忆怎么折、反馈怎么回灌。**没有预设身份**，也没有任何真实人物的记忆或痕迹。
 - 你只需要做一件事：写下"你是谁"。剩下的交给它自己长。
 
+## 结构：芯与皮
+
+0.2.2 起，插件内部拆成两层。这不是洁癖，是为了让「同一个人格活在多个地方」不出岔子。
+
+```
+engine.mjs      芯   激素折算 / 情绪判定 / 语气指令 / 记忆折叠 / S1S2 / 提示词组装 / 记忆落盘
+                     ↑ 零宿主依赖，只 import node 内置
+host-dsh.mjs    皮   apply(ctx) + inject —— 把引擎挂到 dsh 的三个钩子上
+index.js        门面 再导出两边，老的安装方式一行都不用改
+```
+
+**为什么要拆**：如果引擎和宿主混在一起，第二个宿主（QQ、手机 App、命令行）想用它，只能去抄一遍接线代码。抄出来的两份会慢慢长歪——同一个「我」，在两个窗口里说法不一样。芯只有一份，皮可以有很多张，才不会有这个问题。
+
+**怎么接一个新宿主**：不用改 engine.mjs。照着 `host-dsh.mjs` 的形状写一层薄皮，做三件事就够：
+
+1. **进话** → 调 `ingestEvent(mind, text, who, persona, selfName, now)`，然后 `writeMind(mind)`
+2. **出话** → 调 `buildPrompt(mind, persona, adsorbed)`，把结果塞进你自己的系统提示词
+3. **准备数据** → `ensureDataDir()` + `loadPersona()` + `readMind()`
+
+能 import 就能接。引擎不认识你是谁。
 ## 它已经会什么
 
 按生长顺序，四层机制：
@@ -126,7 +146,7 @@ node import-session.mjs --max-events 100 --max-text 200 path/to/file.jsonl
 
 ## 开发者自检
 
-仓库里带了一组验证脚本，覆盖注入、闭环、记忆折叠、S1/S2、会话导入、按天聚合记忆、机器噪声过滤七个方面。改完内核跑一遍（**在任何目录跑都行**，脚本自己定位路径）：
+仓库里带了一组验证脚本，覆盖注入、闭环、记忆折叠、S1/S2、会话导入、按天聚合记忆、机器噪声过滤、芯皮分离八个方面。改完内核跑一遍（**在任何目录跑都行**，脚本自己定位路径）：
 
 ```
 node verify-inject.mjs
@@ -136,6 +156,7 @@ node verify-stage4.mjs
 node verify-import.mjs
 node verify-stage6.mjs
 node verify-stage7.mjs
+node verify-stage8.mjs
 ```
 
 全部通过（每行都是 ✅）再提交。
