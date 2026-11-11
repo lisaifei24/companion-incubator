@@ -68,9 +68,22 @@ const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 //   { "names": { "self": "", "owner": "" }, "persona": { "identity": "", "rules": [], "about": "" } }
 const PERSONA_FILE = join(HERE, 'persona.json');
 
+/**
+ * 读 JSON 文件，容忍 BOM。
+ *
+ * ⚠️ 为什么需要：Windows 的记事本、PowerShell 的 Set-Content -Encoding UTF8、
+ * 不少编辑器都会在文件头写 UTF-8 BOM（EF BB BF）。JSON.parse 见到 BOM 直接抛，
+ * 而 loadPersona 的 catch 会静默返回空白人格——用户明明写了自己的身份，
+ * 插件读到的却是空的，还不会报错。这比崩掉更难查。
+ */
+function readJsonLoose(file) {
+  const raw = readFileSync(file, 'utf8');
+  return JSON.parse(raw.charCodeAt(0) === 0xfeff ? raw.slice(1) : raw);
+}
+
 export function loadPersona() {
   try {
-    if (existsSync(PERSONA_FILE)) return JSON.parse(readFileSync(PERSONA_FILE, 'utf8'));
+    if (existsSync(PERSONA_FILE)) return readJsonLoose(PERSONA_FILE);
   } catch { /* fall through */ }
   return { names: { self: '', owner: '' }, persona: { identity: '', rules: [], about: '' } };
 }
@@ -527,7 +540,7 @@ export function ensureDataDir() {
 }
 
 export function readMind() {
-  try { return JSON.parse(readFileSync(MIND_FILE, 'utf8')); }
+  try { return readJsonLoose(MIND_FILE); }
   catch { return { hormones: { ...Object.fromEntries(HORMONE_KEYS.map((k) => [k, HORMONE_DEF[k].def])), at: Date.now() }, messageCount: 0 }; }
 }
 export function writeMind(m) {

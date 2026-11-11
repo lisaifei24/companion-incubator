@@ -51,13 +51,37 @@ index.js        门面 再导出两边，老的安装方式一行都不用改
 
 ### 第一步：安装
 
-在 Harness 里把这个目录作为 bundle 安装：
+**方式一（推荐）：跑安装器**
+
+```bash
+node install.mjs
+```
+
+它会自己找到 dsh 的 profile（默认 `~/.dsh/profiles/web`），把包装进去，缺人格文件就从模板生成一份。**可以重复跑**，而且不会覆盖你已经填好的人格文件。
+
+```bash
+node install.mjs --link              # 软链方式，改代码立即生效（开发用）
+node install.mjs --profile <目录>    # profile 不在默认位置时指定
+node install.mjs --dry               # 只看会做什么，不落盘
+```
+
+**方式二：用 dsh 自己的装法**
 
 ```
 plugin_manager install_bundle <本目录的绝对路径>
 ```
 
-然后在插件列表里启用 `companion-incubator` 那一行。**装完建议重启一次 Harness**，让插件行进入活跃状态（fiberPhase: active）。
+**方式三：从 tarball 装**（把包给别人的时候用）
+
+```bash
+npm pack                              # 产出 local-companion-incubator-0.2.2.tgz
+# 对方拿到 tgz 之后：
+node install.mjs                      # 或者用 profile 里 pnpm add file:./xxx.tgz
+```
+
+三种方式装完都一样：**重启一次 Harness**，让插件行进入活跃状态（fiberPhase: active），然后在插件列表里确认 `companion-incubator` 是启用的。
+
+> 装之前先确认一件事：**它和别的人格插件不要同时启用**。同一个宿主上跑两个"陪伴者"，两份语气指令会互相打架。
 
 ### 第二步：写下你是谁
 
@@ -146,7 +170,7 @@ node import-session.mjs --max-events 100 --max-text 200 path/to/file.jsonl
 
 ## 开发者自检
 
-仓库里带了一组验证脚本，覆盖注入、闭环、记忆折叠、S1/S2、会话导入、按天聚合记忆、机器噪声过滤、芯皮分离八个方面。改完内核跑一遍（**在任何目录跑都行**，脚本自己定位路径）：
+仓库里带了一组验证脚本，覆盖注入、闭环、记忆折叠、S1/S2、会话导入、按天聚合记忆、机器噪声过滤、芯皮分离、安装器与 BOM 容错九个方面。改完内核跑一遍（**在任何目录跑都行**，脚本自己定位路径）：
 
 ```
 node verify-inject.mjs
@@ -157,6 +181,7 @@ node verify-import.mjs
 node verify-stage6.mjs
 node verify-stage7.mjs
 node verify-stage8.mjs
+node verify-stage9.mjs
 ```
 
 全部通过（每行都是 ✅）再提交。
@@ -174,6 +199,8 @@ node verify-stage8.mjs
 
 - ~~没有"机器噪声"过滤层~~ → **0.2.2 已修**。`shouldIngestEvent` 现在会拒掉三类机器产物：①`source.kind` 是 `schedule`/`cron`/`system` 这类机器通道的消息 ②长得就是回执的短句（`快照已记录，状态平稳`、`判分器回归通过`、`[SCHEDULE REMINDER]` 头部）③整段是 JSON 的任务指令或输出格式说明。判据按**形态**不按措辞白名单，误杀率低；测试见 `verify-stage7.mjs`。
 
+- **安装器不碰 `cordis.patch.yml`**。挂载声明由包里的 `cordis.patch.yml` 作为 bundle 自己声明，dsh 负责读；脚本盲改 YAML 比让宿主处理更危险。所以如果你手工往 profile 里塞文件而没用安装器，记得让 dsh 走一次 bundle 安装流程，否则插件列表里不会出现它。
+- **BOM 容错**。Windows 记事本和 PowerShell 的 `Set-Content -Encoding UTF8` 都会在文件头写 BOM，而 `JSON.parse` 见到 BOM 会直接抛——`loadPersona` 的 catch 会静默返回空白人格，用户明明写了身份却读不到，还不报错。0.2.2 起读 JSON 统一去 BOM（`readJsonLoose`）。
 ## 许可与来源
 
 - 纯本地运行：不联网、不上传、不埋任何遥测。

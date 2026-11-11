@@ -15,11 +15,19 @@
     "index.js",
     "engine.mjs",
     "host-dsh.mjs",
+    "install.mjs",
     "cordis.patch.yml",
+    "example.persona.json",
     "locale/*.json",
     "icon.svg",
-    "persona.json"
+    "persona.json",
+    "README.md",
+    "README.en.md",
+    "docs/*.md"
   ],
+  "bin": {
+    "companion-incubator-install": "./install.mjs"
+  },
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
