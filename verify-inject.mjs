@@ -1,10 +1,13 @@
 // incubator 注入验证：mock 掉 fs/ctx，测真实引擎的输出
 import { decayHormones, moodFromHormones, hormoneStrength, buildPrompt } from './index.js';
 import fs from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+const HERE = dirname(fileURLToPath(import.meta.url));
 
 // 用 example.persona.json（含完整人格文本），断言才有意义；
 // persona.json 是空模板，用它断言「含小墨/准则」永远不成立。
-const persona = JSON.parse(fs.readFileSync('./example.persona.json', 'utf8'));
+const persona = JSON.parse(fs.readFileSync(join(HERE, 'example.persona.json'), 'utf8'));
 
 // 1. plant a baseline mind, then feed a warm message through decay + appraisal
 //    (appraise 是内部函数，这里 rebuild 一份等价行为：直接对齐 RULES 无法访问，

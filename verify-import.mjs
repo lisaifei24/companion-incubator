@@ -4,8 +4,11 @@ import {
   importEvents, importConfigOf,
 } from './index.js';
 import fs from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+const HERE = dirname(fileURLToPath(import.meta.url));
 
-const persona = JSON.parse(fs.readFileSync('./persona.json', 'utf8'));
+const persona = JSON.parse(fs.readFileSync(join(HERE, 'persona.json'), 'utf8'));
 const TEST_NAME = '小墨';
 const base = () => ({ serotonin: 0.55, dopamine: 0.45, cortisol: 0.35, oxytocin: 0.50, melatonin: 0.40 });
 const freshMind = () => ({ hormones: { ...base(), at: Date.now() }, messageCount: 0 });

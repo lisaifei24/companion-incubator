@@ -8,7 +8,8 @@
  * Nothing here is a specific person. There is no name, no memory, no history
  * of any real companion — only the skeleton a companion grows into.
  */
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -388,9 +389,13 @@ export function recallContext(mind) {
   const beads = Array.isArray(mind.memories) ? mind.memories : [];
   if (beads.length) {
     const now = Date.now();
+    // ⚠️ 0.2.2：月/日必须补零。原来 `2026-11-9` 这种变长 key 拿去做
+    // `k < todayK` 的字符串比较会出错——"2026-11-9" > "2026-11-11"，
+    // 于是当月 2..9 号全部被判成「不在往日」，整段记忆静默消失。
     const dayKeyOf = (t) => {
       const d = new Date(t);
-      return `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`;
+      const p2 = (n) => String(n).padStart(2, '0');
+      return `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())}`;
     };
     const todayK = dayKeyOf(now);
     const yestK = dayKeyOf(now - 86400000);
@@ -409,9 +414,13 @@ export function recallContext(mind) {
   // ── digest：按天聚合 ──
   const digests = Array.isArray(mind.digest) ? mind.digest : [];
   if (digests.length) {
+    // ⚠️ 0.2.2：月/日必须补零。原来 `2026-11-9` 这种变长 key 拿去做
+    // `k < todayK` 的字符串比较会出错——"2026-11-9" > "2026-11-11"，
+    // 于是当月 2..9 号全部被判成「不在往日」，整段记忆静默消失。
     const dayKeyOf = (t) => {
       const d = new Date(t);
-      return `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`;
+      const p2 = (n) => String(n).padStart(2, '0');
+      return `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())}`;
     };
     const nowD = new Date();
     const todayK = dayKeyOf(Date.now());
@@ -475,13 +484,49 @@ export function buildPrompt(mind, persona, adsorbed = {}) {
 }
 
 // ── one mind per persona directory ─────────────────────────────
-const MIND_FILE = join(HERE, 'mind.json');
-function readMind() {
+// ── 数据目录（0.2.2 改）──────────────────────────────────────
+//
+// 0.2.1 之前：MIND_FILE = join(HERE, 'mind.json')
+//   HERE 是插件自己的目录 —— 于是「记忆」住在 node_modules 里。
+//   升级插件、重装、清缓存、换机器，记忆跟着一起没。
+//
+// 0.2.2：记忆是「这个人的经历」，不是插件的配置。所以：
+//   ① 环境变量 COMPANION_DATA_DIR 优先（宿主/用户自己指定）
+//   ② 否则用 ~/.companion-incubator（用户主目录，稳定、可备份）
+//   ③ 插件目录只作为最后兜底（只读部署场景）
+//   ④ 老版本在插件目录留下的 mind.json 会被自动「收养」过来，不丢历史
+const DATA_DIR = (() => {
+  const env = process.env.COMPANION_DATA_DIR;
+  if (env && env.trim()) return env.trim();
+  try { return join(homedir(), '.companion-incubator'); } catch { return HERE; }
+})();
+const LEGACY_MIND = join(HERE, 'mind.json');
+const MIND_FILE = join(DATA_DIR, 'mind.json');
+
+/** 确保数据目录存在；老 mind.json 自动迁移过来。 */
+function ensureDataDir() {
+  try { mkdirSync(DATA_DIR, { recursive: true }); } catch { /* ignore */ }
+  try {
+    if (!existsSync(MIND_FILE) && existsSync(LEGACY_MIND)) {
+      copyFileSync(LEGACY_MIND, MIND_FILE);
+    }
+  } catch { /* 迁移失败不阻塞启动 */ }
+}
+
+export function readMind() {
   try { return JSON.parse(readFileSync(MIND_FILE, 'utf8')); }
   catch { return { hormones: { ...Object.fromEntries(HORMONE_KEYS.map((k) => [k, HORMONE_DEF[k].def])), at: Date.now() }, messageCount: 0 }; }
 }
-function writeMind(m) {
-  try { writeFileSync(MIND_FILE, JSON.stringify(m), 'utf8'); } catch { /* ignore */ }
+export function writeMind(m) {
+  // 原子写（0.2.2）：先写临时文件再 rename。
+  // 0.2.1 之前直接 writeFileSync —— 写到一半崩溃/断电就得到半个 JSON，
+  // 下次 readMind 解析失败 → 静默返回空记忆 → 整段经历蒸发。
+  try {
+    mkdirSync(DATA_DIR, { recursive: true });
+    const tmp = MIND_FILE + '.tmp-' + process.pid;
+    writeFileSync(tmp, JSON.stringify(m), 'utf8');
+    renameSync(tmp, MIND_FILE);
+  } catch { /* ignore */ }
 }
 
 // ── 原始会话导入（seed import）─────────────────────────────────
@@ -600,13 +645,57 @@ export function whoOfEvent(ev) {
 
 /** 一条事件是否该进 mind（有文本、且不是我方系统性噪声）。 */
 export function shouldIngestEvent(ev) {
+  // ── 机器噪声过滤（0.2.2 新增）──────────────────────────────
+  // 0.2.1 之前这里只判「有没有文本」。README 里标了「已知边界」：
+  // 一旦有人把定时任务/系统提醒接到孵化器上，[SCHEDULE REMINDER] 的
+  // 回执、快照简报会统统被当成真实对话折进记忆。
+  // 现在把它做实——判据和主库 L145 同一套，不靠措辞白名单靠形态：
+  //   ① source.kind 是 schedule/system 这类机器通道 → 不是他的话
+  //   ② 文本长得就是回执（短、固定句式）→ 不是经历
+  //   ③ 整段是任务指令 JSON（[{i, feeling, comment}]）→ 不是对话
+  const src = ev && ev.data && ev.data.source;
+  if (src && typeof src.kind === 'string') {
+    const k = src.kind.toLowerCase();
+    if (k === 'schedule' || k === 'system' || k === 'cron' || k === 'timer') return false;
+  }
+
   // turn 形状（外部脚本产出的 {time, text, who}）直接可进
-  if (ev && typeof ev.text === 'string' && ev.text.trim() && (ev.who === 'user' || ev.who === 'me')) return true;
+  if (ev && typeof ev.text === 'string' && ev.text.trim() && (ev.who === 'user' || ev.who === 'me')) {
+    return !isMachineNoise(ev.text);
+  }
   const t = String(ev && ev.type || '');
   if (t === 'user/message' || t === 'assistant/message') {
     const text = textOfEvent(ev);
-    return text.trim().length > 0;
+    if (!text.trim()) return false;
+    return !isMachineNoise(text);
   }
+  return false;
+}
+
+/**
+ * 一段文本是不是机器产物（回执/指令/任务 JSON）。
+ * 宁可漏放一个真消息，也不要让回执变成记忆——回执进了记忆会自我强化：
+ * 每小时的快照都变成一次「经历」，记忆很快被自己的回声灌满。
+ */
+export function isMachineNoise(text) {
+  const s = String(text || '').trim();
+  if (!s) return true;
+
+  // ① 定时任务头部
+  if (/^\[SCHEDULE REMINDER/i.test(s)) return true;
+  // ② 短回执的固定句式（几乎不可能出现在真实对话里）
+  if (s.length <= 40) {
+    if (/^快照已记录[，,。]?\s*(状态平稳|状态已记录)/.test(s)) return true;
+    if (/^判分器回归通过/.test(s)) return true;
+    if (/^快照已写入/.test(s)) return true;
+  }
+  // ③ 整段是 JSON（任务指令/结构化输出），不是对话
+  if (/^[\[{]/.test(s) && /[\]}]$/.test(s)) {
+    try { JSON.parse(s); return true; } catch { /* 不是合法 JSON，按普通文本 */ }
+  }
+  // ④ 任务指令里才会出现的祈使句（给模型的输出格式说明）
+  if (/只输出\s*JSON|对每个视频给一个对象|输出格式如下|请严格按以下格式/.test(s)) return true;
+
   return false;
 }
 
@@ -655,6 +744,7 @@ export function adsorbSessionLogs(mind, persona, selfName, logDir) {
 }
 
 export function apply(ctx) {
+  ensureDataDir();
   const persona = loadPersona();
   const adsorbed = adsorbFiles();
   const selfName = (persona.names && persona.names.self) || 'companion';

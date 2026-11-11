@@ -1,6 +1,8 @@
 # 运行时产物：引擎每次运行会写/重建，不该进版本库
-# mind.json 是激素状态（活数据），删掉引擎会自动重建
+# 0.2.2 起 mind.json 默认落在 ~/.companion-incubator，不再在插件目录；
+# 这里仍忽略它，防止有人用 COMPANION_DATA_DIR 指回插件目录时误提交。
 mind.json
+mind.json.tmp-*
 
 # 用户放的原始会话日志（启动吸附源，属于个人数据）
 logs/

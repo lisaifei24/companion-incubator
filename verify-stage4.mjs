@@ -1,8 +1,11 @@
 // 第四阶段验证：S1/S2 内核
 import { s1Predict, s2Check, updateSkill, s1s2Round, s1s2Unlocked } from './index.js';
 import fs from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+const HERE = dirname(fileURLToPath(import.meta.url));
 
-const persona = JSON.parse(fs.readFileSync('./persona.json', 'utf8'));
+const persona = JSON.parse(fs.readFileSync(join(HERE, 'persona.json'), 'utf8'));
 const TEST_NAME = '小墨';
 
 let ok = 0, fail = 0;

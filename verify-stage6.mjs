@@ -5,8 +5,11 @@
 //   ③ 往日按天聚合（一天的多个批次合成一行「昨天 06:00-23:00 共N条」）
 import { recallContext, foldMemory, memoryOf } from './index.js';
 import fs from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-const persona = JSON.parse(fs.readFileSync('./persona.json', 'utf8'));
+const HERE = dirname(fileURLToPath(import.meta.url));
+const persona = JSON.parse(fs.readFileSync(join(HERE, 'persona.json'), 'utf8'));
 const cfg = memoryOf(persona);
 
 let ok = 0, fail = 0;
@@ -20,8 +23,14 @@ const check = (name, got, want) => {
 // 关键：digest 超过 5 批，且全是「昨天」的——旧代码 slice(-5) 会取最近的 5 批，
 // 若今天也压出了 digest，昨天的就会被挤掉。
 const now = Date.now();
-const yesterday = now - 24 * 3600 * 1000;
-const dayBefore = now - 48 * 3600 * 1000;
+// ⚠️ 0.2.2 修：原来用 now-24h+k*5h 造批，跨午夜的批次数量取决于「跑测试时是几点」，
+// 于是这个测试只在上午 9 点到下午 2 点之间才通过——是测试不稳定，不是引擎错。
+// 改成锚定到「那一天的固定钟点」，跟跑的时刻无关。
+const startOfToday = new Date(now); startOfToday.setHours(0, 0, 0, 0);
+const DAY = 24 * 3600 * 1000;
+const atHour = (dayOffset, hour) => startOfToday.getTime() + dayOffset * DAY + hour * 3600 * 1000;
+const yesterday = startOfToday.getTime() - DAY;   // 昨天的 00:00
+const dayBefore = startOfToday.getTime() - 2 * DAY;
 
 const mind = { hormones: {}, memories: [], digest: [] };
 
@@ -34,13 +43,13 @@ for (let b = 0; b < 2; b++) {
     keywords: ['大前天', '旧事' + b],
   });
 }
-// 昨天：4 批（不同时段）
-for (let b = 0; b < 4; b++) {
+// 昨天：4 批，锚定在昨天的 08/12/16/20 点——都不跨午夜，所以必然 4 批全归昨天 = 100 条
+for (const h of [8, 12, 16, 20]) {
   mind.digest.push({
-    from: yesterday + b * 5 * 3600 * 1000,
-    to: yesterday + (b + 1) * 5 * 3600 * 1000,
+    from: atHour(-1, h),
+    to: atHour(-1, h + 3),
     count: 25,
-    keywords: ['昨天', '一起做' + b],
+    keywords: ['昨天', '一起做' + h],
   });
 }
 
@@ -69,7 +78,7 @@ console.log('=== 昨天的记忆在不在 ===');
 check('含「昨天」', ctx.includes('昨天'), true);
 // 注：昨天 4 批里最后一批（yesterday+15h）越过了午夜，按 dayKey 归到「今天」，
 // 这是跨午夜批次的既有语义（以 from 所在日为准）。所以昨天是 3 批聚合 = 75 条。
-check('昨天聚合成一行（跨午夜 1 批归今天，剩 3 批合一）', ctx.includes('昨天') && ctx.includes('共75条'), true);
+check('昨天聚合成一行（4 批全归昨天 = 100 条）', ctx.includes('昨天') && ctx.includes('共100条'), true);
 check('含昨天关键词「一起做」', ctx.includes('一起做'), true);
 
 console.log('\n=== 今天与更早 ===');

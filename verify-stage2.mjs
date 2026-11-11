@@ -1,8 +1,11 @@
 // 第二阶段验证：闭环回灌 + S1/S2 阈值解锁
 import { applyReaction, growthOf, s1s2Unlocked, s1s2Pass } from './index.js';
 import fs from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+const HERE = dirname(fileURLToPath(import.meta.url));
 
-const persona = JSON.parse(fs.readFileSync('./persona.json', 'utf8'));
+const persona = JSON.parse(fs.readFileSync(join(HERE, 'persona.json'), 'utf8'));
 const base = () => ({ serotonin: 0.55, dopamine: 0.45, cortisol: 0.35, oxytocin: 0.50, melatonin: 0.40 });
 
 let ok = 0, fail = 0;

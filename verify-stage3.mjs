@@ -1,8 +1,11 @@
 // 第三阶段验证：通用记忆折叠骨架
 import { foldMemory, memoryOf, scoreBead, keywordsRanked, recallContext, buildPrompt } from './index.js';
 import fs from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+const HERE = dirname(fileURLToPath(import.meta.url));
 
-const persona = JSON.parse(fs.readFileSync('./persona.json', 'utf8'));
+const persona = JSON.parse(fs.readFileSync(join(HERE, 'persona.json'), 'utf8'));
 
 let ok = 0, fail = 0;
 const check = (name, got, want) => {
